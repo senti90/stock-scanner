@@ -13,8 +13,8 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-st.title("🔥 단타 필터 스캐너 (최종형)")
-
+st.title("🔥 장마감 스캐너")
+st.write("다음날 단타 가능성 있는 종목 자동 필터링 되어 보여집니다.")
 selected_date = st.date_input("분석 날짜", datetime.today() - timedelta(days=1))
 
 
