@@ -235,31 +235,43 @@ def fast_scan(date):
 tab1, tab2 = st.tabs(["📊 분석", "⭐ 관심종목"])
 
 with tab1:
+    if "scan_result" not in st.session_state:
+        st.session_state.scan_result = pd.DataFrame()
+
     if st.button("⚡ 기술분석 시작"):
         with st.spinner("기술적 조건 분석 중..."):
-            result = fast_scan(selected_date)
+            st.session_state.scan_result = fast_scan(selected_date)
 
-        if result.empty:
-            st.warning("조건 만족 종목 없음")
-        else:
-            result = result.head(15)
+    result = st.session_state.scan_result
 
-            edited = st.data_editor(
-                result,
-                column_config={
-                    "관심": st.column_config.CheckboxColumn("관심"),
-                    "차트": st.column_config.LinkColumn("차트", display_text="차트보기"),
-                },
-                hide_index=True,
-                use_container_width=True
-            )
+    if result.empty:
+        st.warning("아직 분석 결과가 없습니다. 기술분석 시작 버튼을 눌러주세요.")
+    else:
+        result = result.head(15)
 
-            selected = edited[edited["관심"] == True]
+        edited = st.data_editor(
+            result,
+            key="stock_editor",
+            column_config={
+                "관심": st.column_config.CheckboxColumn("관심"),
+                "차트": st.column_config.LinkColumn("차트", display_text="차트보기"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
 
-            if st.button("관심종목 저장"):
+        selected = edited[edited["관심"] == True]
+
+        if st.button("관심종목 저장"):
+            if selected.empty:
+                st.warning("체크한 종목이 없습니다.")
+            else:
+                saved_count = 0
                 for _, row in selected.iterrows():
                     save_watchlist(row)
-                st.success("저장 완료")
+                    saved_count += 1
+
+                st.success(f"{saved_count}개 관심종목 저장 완료")
 
 with tab2:
     watch = load_watchlist()
