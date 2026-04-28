@@ -15,9 +15,9 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.title("🔥 장마감 스캐너")
 st.write("다음날 단타 가능성 있는 종목 자동 필터링 되어 보여집니다.")
-st.write("분석할 날짜를 선택하세요.")
 
-selected_date = st.date_input("분석 날짜", datetime.today() - timedelta(days=1))
+
+selected_date = st.date_input("분석 날짜 선택", datetime.today() - timedelta(days=1))
 
 
 # 관심종목 불러오기
