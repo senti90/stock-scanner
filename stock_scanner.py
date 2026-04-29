@@ -14,38 +14,16 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.title("🔥 단타 + 뉴스 + 섹터 스캐너")
+st.write("수급, 캔들, 기술적 조건, 뉴스 재료 확인용 스캐너입니다.")
 
 selected_date = st.date_input("분석 날짜", datetime.today() - timedelta(days=1))
 
 
-# =========================
-# 섹터 추정 (간단 버전)
-# =========================
-def get_sector(name):
-    if any(x in name for x in ["바이오", "제약", "헬스"]):
-        return "바이오"
-    if any(x in name for x in ["반도체", "전자", "칩"]):
-        return "반도체"
-    if any(x in name for x in ["철강", "포스코"]):
-        return "철강"
-    if any(x in name for x in ["자동차", "모터"]):
-        return "자동차"
-    if any(x in name for x in ["화학", "케미칼"]):
-        return "화학"
-    return "기타"
+def load_watchlist():
+    data = supabase.table("watchlist").select("*").execute()
+    return pd.DataFrame(data.data)
 
 
-# =========================
-# 뉴스 링크 생성
-# =========================
-def get_news_link(name):
-    query = urllib.parse.quote(f"{name} 주가 상승")
-    return f"https://search.naver.com/search.naver?where=news&query={query}"
-
-
-# =========================
-# 관심종목 저장
-# =========================
 def save_watchlist(row):
     item = {
         "code": str(row["종목코드"]),
@@ -59,122 +37,271 @@ def save_watchlist(row):
     supabase.table("watchlist").insert(item).execute()
 
 
-def load_watchlist():
-    data = supabase.table("watchlist").select("*").execute()
-    return pd.DataFrame(data.data)
+def get_news_link(name):
+    query = urllib.parse.quote(f"{name} 주가 상승 재료")
+    return f"https://search.naver.com/search.naver?where=news&query={query}"
 
 
-# =========================
-# ETF 제거
-# =========================
+def get_sector(name):
+    if any(x in name for x in ["바이오", "제약", "셀", "헬스", "메디"]):
+        return "바이오/제약"
+    if any(x in name for x in ["반도체", "전자", "테크", "칩", "하이닉스"]):
+        return "반도체/전자"
+    if any(x in name for x in ["포스코", "철강", "스틸", "금속"]):
+        return "철강/금속"
+    if any(x in name for x in ["화학", "케미", "소재", "석유"]):
+        return "화학/소재"
+    if any(x in name for x in ["자동차", "모터", "차", "타이어"]):
+        return "자동차/부품"
+    if any(x in name for x in ["전력", "에너지", "전기", "배터리", "2차전지"]):
+        return "에너지/2차전지"
+    if any(x in name for x in ["AI", "소프트", "정보", "데이터", "시스템"]):
+        return "AI/소프트웨어"
+    return "기타"
+
+
 def is_excluded(name):
-    keywords = ["ETF", "ETN", "KODEX", "TIGER", "KBSTAR", "ARIRANG",
-                "레버리지", "인버스", "스팩", "리츠", "우"]
+    upper_name = name.upper()
 
-    return any(k in name.upper() for k in keywords)
+    exclude_keywords = [
+        "ETF", "ETN", "KODEX", "TIGER", "KBSTAR", "ACE", "SOL",
+        "HANARO", "KOSEF", "ARIRANG", "TIMEFOLIO",
+        "레버리지", "인버스", "선물", "스팩", "SPAC", "리츠", "REIT"
+    ]
+
+    if any(k in upper_name for k in exclude_keywords):
+        return True
+
+    # 우선주 제거
+    if name.endswith("우") or "우B" in name or "우C" in name:
+        return True
+
+    return False
 
 
-# =========================
-# 거래량 상위
-# =========================
-def get_top_volume():
-    url = "https://finance.naver.com/sise/sise_quant.naver"
-    res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-    soup = BeautifulSoup(res.text, "html.parser")
-
+def scrape_naver_sise(url, pages=4):
     stocks = []
 
-    for row in soup.select("table.type_2 tr"):
-        cols = row.find_all("td")
+    for page in range(1, pages + 1):
+        page_url = f"{url}&page={page}" if "?" in url else f"{url}?page={page}"
 
-        if len(cols) > 1:
-            try:
-                name = cols[1].text.strip()
-                code = cols[1].find("a")["href"].split("=")[-1]
+        try:
+            res = requests.get(page_url, headers={"User-Agent": "Mozilla/5.0"})
+            soup = BeautifulSoup(res.text, "html.parser")
 
-                if not is_excluded(name):
-                    stocks.append((code, name))
-            except:
-                continue
+            for row in soup.select("table.type_2 tr"):
+                cols = row.find_all("td")
 
-    return stocks[:200]
+                if len(cols) > 1:
+                    try:
+                        name = cols[1].text.strip()
+                        link_tag = cols[1].find("a")
+
+                        if not link_tag:
+                            continue
+
+                        code = link_tag["href"].split("=")[-1]
+
+                        if not name or not code:
+                            continue
+
+                        if is_excluded(name):
+                            continue
+
+                        stocks.append((code, name))
+
+                    except:
+                        continue
+        except:
+            continue
+
+    return stocks
 
 
-# =========================
-# 분석
-# =========================
+def get_candidates():
+    volume_url = "https://finance.naver.com/sise/sise_quant.naver?sosok=0"
+    volume_url2 = "https://finance.naver.com/sise/sise_quant.naver?sosok=1"
+    rise_url = "https://finance.naver.com/sise/sise_rise.naver?sosok=0"
+    rise_url2 = "https://finance.naver.com/sise/sise_rise.naver?sosok=1"
+
+    candidates = []
+    candidates += scrape_naver_sise(volume_url, pages=3)
+    candidates += scrape_naver_sise(volume_url2, pages=3)
+    candidates += scrape_naver_sise(rise_url, pages=3)
+    candidates += scrape_naver_sise(rise_url2, pages=3)
+
+    # 중복 제거
+    unique = {}
+    for code, name in candidates:
+        unique[code] = name
+
+    return list(unique.items())[:400]
+
+
 def fast_scan(date):
-    start = (date - timedelta(days=40)).strftime("%Y-%m-%d")
-    end = date.strftime("%Y-%m-%d")
+    start = (date - timedelta(days=45)).strftime("%Y-%m-%d")
+    end = (date + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    stocks = get_top_volume()
+    candidates = get_candidates()
     results = []
 
-    for code, name in stocks:
+    for code, name in candidates:
         try:
             df = fdr.DataReader(code, start, end)
 
-            if df is None or len(df) < 25:
+            if df is None or df.empty:
+                continue
+
+            df = df[df.index <= pd.to_datetime(date)]
+
+            if len(df) < 25:
                 continue
 
             d = df.iloc[-1]
 
             open_p = d["Open"]
             high_p = d["High"]
+            low_p = d["Low"]
             close_p = d["Close"]
-            vol = d["Volume"]
+            volume = d["Volume"]
 
-            if open_p == 0 or high_p == 0:
+            if open_p == 0 or high_p == 0 or close_p == 0:
                 continue
 
-            value = close_p * vol
-            change = ((close_p - open_p) / open_p) * 100
-            near_high = ((high_p - close_p) / high_p) * 100
+            value = close_p * volume
+
+            change_rate = ((close_p - open_p) / open_p) * 100
+            close_near_high = ((high_p - close_p) / high_p) * 100
+            upper_tail = ((high_p - close_p) / close_p) * 100
 
             ma5 = df["Close"].rolling(5).mean().iloc[-1]
             ma20 = df["Close"].rolling(20).mean().iloc[-1]
+            high20 = df["High"].rolling(20).max().iloc[-2]
+            avg_volume20 = df["Volume"].rolling(20).mean().iloc[-2]
+            volume_power = volume / avg_volume20 if avg_volume20 > 0 else 0
 
+            candle = "양봉" if close_p > open_p else "음봉"
             sector = get_sector(name)
 
-            if value < 20000000000:
-                continue
-            if change < 5:
-                continue
-            if close_p <= open_p:
-                continue
-            if near_high > 5:
+            # 너무 약한 종목만 제거
+            if value < 10000000000:
                 continue
 
-            score = round(change + (value / 10000000000), 1)
+            if close_p < 1000:
+                continue
 
-            results.append({
-                "관심": False,
-                "종목코드": code,
-                "종목명": name,
-                "섹터": sector,
-                "차트": f"https://finance.naver.com/item/main.naver?code={code}",
-                "뉴스": get_news_link(name),
-                "등락률": round(change, 2),
-                "거래대금(억)": round(value / 100000000, 1),
-                "점수": score,
-                "캔들": "양봉",
-                "이유": "수급 + 기술적 조건"
-            })
+            if change_rate < 3:
+                continue
+
+            score = 0
+            reasons = []
+
+            # 수급
+            if value >= 10000000000:
+                score += 10
+                reasons.append("거래대금 100억 이상")
+
+            if value >= 30000000000:
+                score += 15
+                reasons.append("거래대금 300억 이상")
+
+            if value >= 50000000000:
+                score += 20
+                reasons.append("거래대금 500억 이상")
+
+            if volume_power >= 2:
+                score += 15
+                reasons.append("20일 평균 거래량 2배 이상")
+
+            if volume_power >= 3:
+                score += 20
+                reasons.append("20일 평균 거래량 3배 이상")
+
+            # 상승/캔들
+            if change_rate >= 5:
+                score += 15
+                reasons.append("5% 이상 상승")
+
+            if change_rate >= 8:
+                score += 20
+                reasons.append("8% 이상 상승")
+
+            if change_rate >= 15:
+                score += 20
+                reasons.append("15% 이상 급등")
+
+            if candle == "양봉":
+                score += 10
+                reasons.append("양봉 마감")
+            else:
+                score -= 15
+                reasons.append("음봉 마감")
+
+            if close_near_high <= 5:
+                score += 15
+                reasons.append("고가 5% 이내 마감")
+
+            if close_near_high <= 3:
+                score += 20
+                reasons.append("고가 3% 이내 마감")
+
+            if upper_tail <= 5:
+                score += 10
+                reasons.append("윗꼬리 짧음")
+
+            # 기술적 분석
+            if close_p > ma5:
+                score += 10
+                reasons.append("5일선 위")
+
+            if close_p > ma20:
+                score += 10
+                reasons.append("20일선 위")
+
+            if ma5 > ma20:
+                score += 10
+                reasons.append("5일선 > 20일선")
+
+            if close_p >= high20:
+                score += 25
+                reasons.append("20일 신고가 돌파")
+
+            # 과열 감점
+            if change_rate >= 25 and close_near_high > 3:
+                score -= 15
+                reasons.append("과열 주의")
+
+            if score >= 45:
+                results.append({
+                    "관심": False,
+                    "종목코드": code,
+                    "종목명": name,
+                    "섹터": sector,
+                    "차트": f"https://finance.naver.com/item/main.naver?code={code}",
+                    "뉴스": get_news_link(name),
+                    "캔들": candle,
+                    "등락률(%)": round(change_rate, 2),
+                    "거래대금(억)": round(value / 100000000, 1),
+                    "거래량폭증배수": round(volume_power, 2),
+                    "5일선": round(ma5, 0),
+                    "20일선": round(ma20, 0),
+                    "20일신고가돌파": "Y" if close_p >= high20 else "N",
+                    "고가대비종가거리(%)": round(close_near_high, 2),
+                    "점수": int(score),
+                    "이유": ", ".join(reasons)
+                })
 
         except:
             continue
 
-    df = pd.DataFrame(results)
+    result = pd.DataFrame(results)
 
-    if not df.empty:
-        df = df.sort_values(by="점수", ascending=False)
+    if not result.empty:
+        result = result.sort_values(by="점수", ascending=False)
 
-    return df
+    return result
 
 
-# =========================
-# UI
-# =========================
 tab1, tab2 = st.tabs(["📊 분석", "⭐ 관심종목"])
 
 with tab1:
@@ -182,20 +309,21 @@ with tab1:
         st.session_state.result = pd.DataFrame()
 
     if st.button("⚡ 분석 시작"):
-        st.session_state.result = fast_scan(selected_date)
+        with st.spinner("분석 중입니다..."):
+            st.session_state.result = fast_scan(selected_date)
 
     result = st.session_state.result
 
     if result.empty:
-        st.warning("분석 결과 없음")
+        st.info("분석 시작 버튼을 눌러주세요. 조건 만족 종목이 없으면 결과가 비어 있을 수 있습니다.")
     else:
         edited = st.data_editor(
-            result.head(15),
+            result.head(20),
             key="editor",
             column_config={
                 "관심": st.column_config.CheckboxColumn("관심"),
-                "차트": st.column_config.LinkColumn("차트"),
-                "뉴스": st.column_config.LinkColumn("뉴스"),
+                "차트": st.column_config.LinkColumn("차트", display_text="차트보기"),
+                "뉴스": st.column_config.LinkColumn("뉴스", display_text="뉴스보기"),
             },
             use_container_width=True,
             hide_index=True
@@ -203,23 +331,32 @@ with tab1:
 
         selected = edited[edited["관심"] == True]
 
-        if st.button("저장"):
-            for _, row in selected.iterrows():
-                save_watchlist(row)
-            st.success("저장 완료")
+        if st.button("관심종목 저장"):
+            if selected.empty:
+                st.warning("체크한 종목이 없습니다.")
+            else:
+                for _, row in selected.iterrows():
+                    save_watchlist(row)
+                st.success(f"{len(selected)}개 저장 완료")
+
 
 with tab2:
     watch = load_watchlist()
 
     if watch.empty:
-        st.info("없음")
+        st.info("관심종목 없음")
     else:
+        if "sector" not in watch.columns:
+            watch["sector"] = "기타"
+
         watch["차트"] = watch["code"].apply(
             lambda x: f"https://finance.naver.com/item/main.naver?code={x}"
         )
 
         st.dataframe(
             watch[["name", "sector", "score", "reason", "차트"]],
-            column_config={"차트": st.column_config.LinkColumn("차트")},
+            column_config={
+                "차트": st.column_config.LinkColumn("차트", display_text="보기")
+            },
             use_container_width=True
         )
