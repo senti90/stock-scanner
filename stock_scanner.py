@@ -14,8 +14,8 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-st.title("🔥 단타 + 뉴스재료 분석 스캐너")
-st.write("수급, 캔들, 기술적 조건, 최근 1개월 뉴스재료를 함께 분석합니다.")
+st.title("🔥 단타 + 뉴스재료 + 테마섹터 스캐너")
+st.write("수급, 캔들, 기술적 조건, 최근 1개월 뉴스재료와 테마섹터를 함께 분석합니다.")
 
 selected_date = st.date_input("분석 날짜", datetime.today() - timedelta(days=1))
 
@@ -73,7 +73,7 @@ def infer_news_material(titles):
 
     text = " ".join(titles)
 
-    theme_keywords = {
+    material_keywords = {
         "2차전지/배터리": ["2차전지", "배터리", "리튬", "양극재", "음극재", "전고체", "ESS"],
         "반도체": ["반도체", "HBM", "D램", "낸드", "파운드리", "AI칩", "웨이퍼"],
         "AI/로봇": ["AI", "인공지능", "로봇", "챗봇", "자동화", "엔비디아"],
@@ -86,20 +86,22 @@ def infer_news_material(titles):
         "경영권/지분": ["지분", "인수", "합병", "M&A", "최대주주", "경영권"],
         "중국/미중갈등": ["중국", "미중", "관세", "수출통제", "희토류"],
         "화장품/소비재": ["화장품", "K뷰티", "소비", "면세", "중국 소비"],
+        "금융/증권": ["증권", "은행", "금융", "보험", "금리", "자본시장"],
     }
 
     matched = []
 
-    for theme, keywords in theme_keywords.items():
+    for material, keywords in material_keywords.items():
         count = sum(text.count(k) for k in keywords)
         if count > 0:
-            matched.append((theme, count))
+            matched.append((material, count))
 
     if not matched:
         return "재료 불명확"
 
     matched = sorted(matched, key=lambda x: x[1], reverse=True)
     return ", ".join([x[0] for x in matched[:3]])
+
 
 def infer_theme_sector(titles):
     if not titles:
@@ -109,15 +111,17 @@ def infer_theme_sector(titles):
 
     theme_map = {
         "2차전지": ["2차전지", "배터리", "리튬", "양극재", "음극재", "전고체", "ESS"],
-        "반도체/AI": ["반도체", "HBM", "D램", "AI", "엔비디아", "데이터센터"],
-        "방산": ["방산", "무기", "수출", "드론", "국방"],
-        "원전/전력": ["원전", "전력", "변압기", "전선", "송전"],
-        "바이오": ["임상", "FDA", "신약", "치료제"],
-        "자동차": ["자동차", "전기차", "자율주행"],
-        "철강/소재": ["철강", "금속", "니켈", "구리"],
-        "정책": ["정부", "정책", "지원", "규제완화"],
-        "M&A/지분": ["인수", "합병", "지분", "경영권"],
-        "중국/수출": ["중국", "수출", "관세"],
+        "반도체/AI": ["반도체", "HBM", "D램", "낸드", "AI", "엔비디아", "데이터센터"],
+        "방산/드론": ["방산", "무기", "수출", "드론", "국방", "K2", "K9"],
+        "원전/전력": ["원전", "전력", "변압기", "전선", "송전", "전력망", "SMR"],
+        "바이오/제약": ["임상", "FDA", "신약", "치료제", "제약", "바이오"],
+        "금융/증권": ["증권", "은행", "금융", "보험", "금리", "자본시장"],
+        "자동차/로봇": ["자동차", "전기차", "자율주행", "로봇"],
+        "철강/소재": ["철강", "금속", "니켈", "구리", "소재"],
+        "화장품/소비재": ["화장품", "K뷰티", "소비", "면세"],
+        "정책/정부지원": ["정부", "정책", "지원", "규제완화", "국책"],
+        "M&A/지분": ["인수", "합병", "지분", "경영권", "최대주주"],
+        "중국/수출": ["중국", "수출", "관세", "희토류"],
     }
 
     scores = []
@@ -131,10 +135,12 @@ def infer_theme_sector(titles):
         return "기타테마"
 
     scores = sorted(scores, key=lambda x: x[1], reverse=True)
-
     return scores[0][0]
-    
+
+
 def get_sector(name):
+    if any(x in name for x in ["증권", "투자", "금융", "은행", "보험", "카드"]):
+        return "금융/증권"
     if any(x in name for x in ["바이오", "제약", "셀", "헬스", "메디"]):
         return "바이오/제약"
     if any(x in name for x in ["반도체", "전자", "테크", "칩", "하이닉스"]):
@@ -143,7 +149,7 @@ def get_sector(name):
         return "철강/금속"
     if any(x in name for x in ["화학", "케미", "소재", "석유"]):
         return "화학/소재"
-    if any(x in name for x in ["자동차", "모터", "차", "타이어"]):
+    if any(x in name for x in ["자동차", "모터", "타이어"]):
         return "자동차/부품"
     if any(x in name for x in ["전력", "에너지", "전기", "배터리", "2차전지"]):
         return "에너지/2차전지"
@@ -230,7 +236,6 @@ def get_candidates():
 
 
 def fast_scan(date):
-    theme_sector = infer_theme_sector(news_titles)
     start = (date - timedelta(days=45)).strftime("%Y-%m-%d")
     end = (date + timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -359,6 +364,7 @@ def fast_scan(date):
                             if score >= 45:
                                 news_titles = fetch_news_titles(name)
                                 news_material = infer_news_material(news_titles)
+                                theme_sector = infer_theme_sector(news_titles)
                                 news_titles_text = " / ".join(news_titles[:5])
 
                                 results.append({
