@@ -441,6 +441,15 @@ def fast_scan(date):
     status.write(f"분석 완료: 총 {total}개 중 {len(result_df)}개 통과")
     found_box.write(f"최종 통과 종목 {len(result_df)}개")
 
+    status.write(f"분석 완료: 총 {total}개 중 {len(result_df)}개 통과")
+    found_box.write(f"최종 통과 종목 {len(result_df)}개")
+
+    progress.empty()
+    news_progress.empty()
+    status.empty()
+    news_status.empty()
+    found_box.empty()
+
     return result_df
 
 
