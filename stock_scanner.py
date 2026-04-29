@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from supabase import create_client
 from datetime import datetime, timedelta
 import urllib.parse
+import xml.etree.ElementTree as ET
 
 st.set_page_config(page_title="단타 스캐너", layout="wide")
 
@@ -13,8 +14,8 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-st.title("🔥 단타 + 뉴스 + 섹터 스캐너")
-st.write("수급, 캔들, 기술적 조건, 뉴스 재료 확인용 스캐너입니다.")
+st.title("🔥 단타 + 뉴스재료 분석 스캐너")
+st.write("수급, 캔들, 기술적 조건, 최근 1개월 뉴스재료를 함께 분석합니다.")
 
 selected_date = st.date_input("분석 날짜", datetime.today() - timedelta(days=1))
 
@@ -33,6 +34,8 @@ def save_watchlist(row):
         "score": int(row["점수"]),
         "reason": str(row["이유"]),
         "sector": str(row["섹터"]),
+        "news_material": str(row["뉴스재료"]),
+        "news_titles": str(row["뉴스제목"]),
     }
     supabase.table("watchlist").insert(item).execute()
 
@@ -40,6 +43,63 @@ def save_watchlist(row):
 def get_news_link(name):
     query = urllib.parse.quote(f"{name} 주가 상승 재료")
     return f"https://search.naver.com/search.naver?where=news&query={query}"
+
+
+def fetch_news_titles(name):
+    query = urllib.parse.quote(f"{name} 주가 OR 상승 OR 급등 OR 수주 OR 계약 OR 실적")
+    url = f"https://news.google.com/rss/search?q={query}+when:30d&hl=ko&gl=KR&ceid=KR:ko"
+
+    titles = []
+
+    try:
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        root = ET.fromstring(res.content)
+
+        for item in root.findall(".//item")[:10]:
+            title = item.find("title")
+            if title is not None and title.text:
+                clean_title = title.text.split(" - ")[0].strip()
+                titles.append(clean_title)
+
+    except:
+        pass
+
+    return titles
+
+
+def infer_news_material(titles):
+    if not titles:
+        return "뉴스 부족"
+
+    text = " ".join(titles)
+
+    theme_keywords = {
+        "2차전지/배터리": ["2차전지", "배터리", "리튬", "양극재", "음극재", "전고체", "ESS"],
+        "반도체": ["반도체", "HBM", "D램", "낸드", "파운드리", "AI칩", "웨이퍼"],
+        "AI/로봇": ["AI", "인공지능", "로봇", "챗봇", "자동화", "엔비디아"],
+        "방산": ["방산", "무기", "수출", "K2", "K9", "드론", "국방"],
+        "원전/전력": ["원전", "전력", "변압기", "전선", "송전", "전력망", "SMR"],
+        "바이오/제약": ["임상", "FDA", "신약", "바이오", "제약", "치료제", "허가"],
+        "수주/공급계약": ["수주", "공급계약", "계약", "납품", "MOU", "협약"],
+        "실적개선": ["실적", "영업이익", "매출", "흑자", "어닝", "호실적"],
+        "정책/정부지원": ["정부", "정책", "지원", "규제완화", "국책", "예산"],
+        "경영권/지분": ["지분", "인수", "합병", "M&A", "최대주주", "경영권"],
+        "중국/미중갈등": ["중국", "미중", "관세", "수출통제", "희토류"],
+        "화장품/소비재": ["화장품", "K뷰티", "소비", "면세", "중국 소비"],
+    }
+
+    matched = []
+
+    for theme, keywords in theme_keywords.items():
+        count = sum(text.count(k) for k in keywords)
+        if count > 0:
+            matched.append((theme, count))
+
+    if not matched:
+        return "재료 불명확"
+
+    matched = sorted(matched, key=lambda x: x[1], reverse=True)
+    return ", ".join([x[0] for x in matched[:3]])
 
 
 def get_sector(name):
@@ -78,7 +138,7 @@ def is_excluded(name):
     return False
 
 
-def scrape_naver_sise(url, pages=4):
+def scrape_naver_sise(url, pages=3):
     stocks = []
 
     for page in range(1, pages + 1):
@@ -264,11 +324,18 @@ def fast_scan(date):
                                 reasons.append("과열 주의")
 
                             if score >= 45:
+                                news_titles = fetch_news_titles(name)
+                                news_material = infer_news_material(news_titles)
+                                news_titles_text = " / ".join(news_titles[:5])
+
                                 results.append({
                                     "관심": False,
                                     "종목코드": code,
                                     "종목명": name,
                                     "섹터": sector,
+                                    "뉴스재료": news_material,
+                                    "뉴스건수": len(news_titles),
+                                    "뉴스제목": news_titles_text,
                                     "차트": f"https://finance.naver.com/item/main.naver?code={code}",
                                     "뉴스": get_news_link(name),
                                     "캔들": candle,
@@ -345,15 +412,16 @@ with tab2:
     if watch.empty:
         st.info("관심종목 없음")
     else:
-        if "sector" not in watch.columns:
-            watch["sector"] = "기타"
+        for col in ["sector", "news_material", "news_titles"]:
+            if col not in watch.columns:
+                watch[col] = ""
 
         watch["차트"] = watch["code"].apply(
             lambda x: f"https://finance.naver.com/item/main.naver?code={x}"
         )
 
         st.dataframe(
-            watch[["name", "sector", "score", "reason", "차트"]],
+            watch[["name", "sector", "score", "reason", "news_material", "news_titles", "차트"]],
             column_config={
                 "차트": st.column_config.LinkColumn("차트", display_text="보기")
             },
