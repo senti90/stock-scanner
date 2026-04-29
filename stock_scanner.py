@@ -101,7 +101,39 @@ def infer_news_material(titles):
     matched = sorted(matched, key=lambda x: x[1], reverse=True)
     return ", ".join([x[0] for x in matched[:3]])
 
+def infer_theme_sector(titles):
+    if not titles:
+        return "테마없음"
 
+    text = " ".join(titles)
+
+    theme_map = {
+        "2차전지": ["2차전지", "배터리", "리튬", "양극재", "음극재", "전고체", "ESS"],
+        "반도체/AI": ["반도체", "HBM", "D램", "AI", "엔비디아", "데이터센터"],
+        "방산": ["방산", "무기", "수출", "드론", "국방"],
+        "원전/전력": ["원전", "전력", "변압기", "전선", "송전"],
+        "바이오": ["임상", "FDA", "신약", "치료제"],
+        "자동차": ["자동차", "전기차", "자율주행"],
+        "철강/소재": ["철강", "금속", "니켈", "구리"],
+        "정책": ["정부", "정책", "지원", "규제완화"],
+        "M&A/지분": ["인수", "합병", "지분", "경영권"],
+        "중국/수출": ["중국", "수출", "관세"],
+    }
+
+    scores = []
+
+    for theme, keywords in theme_map.items():
+        count = sum(text.count(k) for k in keywords)
+        if count > 0:
+            scores.append((theme, count))
+
+    if not scores:
+        return "기타테마"
+
+    scores = sorted(scores, key=lambda x: x[1], reverse=True)
+
+    return scores[0][0]
+    
 def get_sector(name):
     if any(x in name for x in ["바이오", "제약", "셀", "헬스", "메디"]):
         return "바이오/제약"
@@ -198,6 +230,7 @@ def get_candidates():
 
 
 def fast_scan(date):
+    theme_sector = infer_theme_sector(news_titles)
     start = (date - timedelta(days=45)).strftime("%Y-%m-%d")
     end = (date + timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -333,6 +366,7 @@ def fast_scan(date):
                                     "종목코드": code,
                                     "종목명": name,
                                     "섹터": sector,
+                                    "테마섹터": theme_sector,
                                     "뉴스재료": news_material,
                                     "뉴스건수": len(news_titles),
                                     "뉴스제목": news_titles_text,
