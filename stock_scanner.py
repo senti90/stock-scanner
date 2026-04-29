@@ -7,6 +7,7 @@ from supabase import create_client
 from datetime import datetime, timedelta
 import urllib.parse
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 st.set_page_config(page_title="단타 스캐너", layout="wide")
 
@@ -14,8 +15,10 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+MAX_WORKERS = 8
+
 st.title("🔥 단타 + 뉴스재료 + 테마섹터 스캐너")
-st.write("수급, 캔들, 기술적 조건, 최근 1개월 뉴스재료와 테마섹터를 함께 분석합니다.")
+st.write("1차 기술분석은 병렬 처리, 통과 종목만 뉴스재료를 분석합니다.")
 
 selected_date = st.date_input("분석 날짜", datetime.today() - timedelta(days=1))
 
@@ -48,7 +51,6 @@ def get_news_link(name):
 def fetch_news_titles(name):
     query = urllib.parse.quote(f"{name} 주가 OR 상승 OR 급등 OR 수주 OR 계약 OR 실적")
     url = f"https://news.google.com/rss/search?q={query}+when:30d&hl=ko&gl=KR&ceid=KR:ko"
-
     titles = []
 
     try:
@@ -60,7 +62,6 @@ def fetch_news_titles(name):
             if title is not None and title.text:
                 clean_title = title.text.split(" - ")[0].strip()
                 titles.append(clean_title)
-
     except:
         pass
 
@@ -90,7 +91,6 @@ def infer_news_material(titles):
     }
 
     matched = []
-
     for material, keywords in material_keywords.items():
         count = sum(text.count(k) for k in keywords)
         if count > 0:
@@ -125,7 +125,6 @@ def infer_theme_sector(titles):
     }
 
     scores = []
-
     for theme, keywords in theme_map.items():
         count = sum(text.count(k) for k in keywords)
         if count > 0:
@@ -183,7 +182,7 @@ def scrape_naver_sise(url, pages=3):
         page_url = f"{url}&page={page}" if "?" in url else f"{url}?page={page}"
 
         try:
-            res = requests.get(page_url, headers={"User-Agent": "Mozilla/5.0"})
+            res = requests.get(page_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
             soup = BeautifulSoup(res.text, "html.parser")
 
             for row in soup.select("table.type_2 tr"):
@@ -206,7 +205,6 @@ def scrape_naver_sise(url, pages=3):
                             continue
 
                         stocks.append((code, name))
-
                     except:
                         continue
         except:
@@ -235,10 +233,144 @@ def get_candidates():
     return list(unique.items())[:400]
 
 
-def fast_scan(date):
-    start = (date - timedelta(days=45)).strftime("%Y-%m-%d")
-    end = (date + timedelta(days=1)).strftime("%Y-%m-%d")
+def analyze_one_stock(code, name, date):
+    try:
+        start = (date - timedelta(days=45)).strftime("%Y-%m-%d")
+        end = (date + timedelta(days=1)).strftime("%Y-%m-%d")
 
+        df = fdr.DataReader(code, start, end)
+
+        if df is None or df.empty:
+            return None
+
+        df = df[df.index <= pd.to_datetime(date)]
+
+        if len(df) < 25:
+            return None
+
+        d = df.iloc[-1]
+
+        open_p = d["Open"]
+        high_p = d["High"]
+        close_p = d["Close"]
+        volume = d["Volume"]
+
+        if open_p == 0 or high_p == 0 or close_p == 0:
+            return None
+
+        value = close_p * volume
+
+        change_rate = ((close_p - open_p) / open_p) * 100
+        close_near_high = ((high_p - close_p) / high_p) * 100
+        upper_tail = ((high_p - close_p) / close_p) * 100
+
+        ma5 = df["Close"].rolling(5).mean().iloc[-1]
+        ma20 = df["Close"].rolling(20).mean().iloc[-1]
+        high20 = df["High"].rolling(20).max().iloc[-2]
+        avg_volume20 = df["Volume"].rolling(20).mean().iloc[-2]
+        volume_power = volume / avg_volume20 if avg_volume20 > 0 else 0
+
+        candle = "양봉" if close_p > open_p else "음봉"
+        sector = get_sector(name)
+
+        if value < 10000000000:
+            return None
+        if close_p < 1000:
+            return None
+        if change_rate < 3:
+            return None
+
+        score = 0
+        reasons = []
+
+        if value >= 10000000000:
+            score += 10
+            reasons.append("거래대금 100억 이상")
+        if value >= 30000000000:
+            score += 15
+            reasons.append("거래대금 300억 이상")
+        if value >= 50000000000:
+            score += 20
+            reasons.append("거래대금 500억 이상")
+
+        if volume_power >= 2:
+            score += 15
+            reasons.append("20일 평균 거래량 2배 이상")
+        if volume_power >= 3:
+            score += 20
+            reasons.append("20일 평균 거래량 3배 이상")
+
+        if change_rate >= 5:
+            score += 15
+            reasons.append("5% 이상 상승")
+        if change_rate >= 8:
+            score += 20
+            reasons.append("8% 이상 상승")
+        if change_rate >= 15:
+            score += 20
+            reasons.append("15% 이상 급등")
+
+        if candle == "양봉":
+            score += 10
+            reasons.append("양봉 마감")
+        else:
+            score -= 15
+            reasons.append("음봉 마감")
+
+        if close_near_high <= 5:
+            score += 15
+            reasons.append("고가 5% 이내 마감")
+        if close_near_high <= 3:
+            score += 20
+            reasons.append("고가 3% 이내 마감")
+        if upper_tail <= 5:
+            score += 10
+            reasons.append("윗꼬리 짧음")
+
+        if close_p > ma5:
+            score += 10
+            reasons.append("5일선 위")
+        if close_p > ma20:
+            score += 10
+            reasons.append("20일선 위")
+        if ma5 > ma20:
+            score += 10
+            reasons.append("5일선 > 20일선")
+        if close_p >= high20:
+            score += 25
+            reasons.append("20일 신고가 돌파")
+
+        if change_rate >= 25 and close_near_high > 3:
+            score -= 15
+            reasons.append("과열 주의")
+
+        if score < 45:
+            return None
+
+        return {
+            "관심": False,
+            "종목코드": code,
+            "종목명": name,
+            "섹터": sector,
+            "차트": f"https://finance.naver.com/item/main.naver?code={code}",
+            "뉴스": get_news_link(name),
+            "캔들": candle,
+            "등락률(%)": round(change_rate, 2),
+            "거래대금(억)": round(value / 100000000, 1),
+            "거래량폭증배수": round(volume_power, 2),
+            "5일선": round(ma5, 0),
+            "20일선": round(ma20, 0),
+            "20일신고가돌파": "Y" if close_p >= high20 else "N",
+            "고가대비종가거리(%)": round(close_near_high, 2),
+            "점수": int(score),
+            "이유": ", ".join(reasons),
+        }
+
+    except:
+        return None
+
+
+def fast_scan(date):
     candidates = get_candidates()
     total = len(candidates)
 
@@ -249,163 +381,67 @@ def fast_scan(date):
     status.write(f"후보 종목 {total}개 분석 준비 중...")
     found_box.write("조건 통과 종목 0개")
 
-    results = []
-
     if total == 0:
         status.write("후보 종목을 가져오지 못했습니다.")
         return pd.DataFrame()
 
-    for idx, (code, name) in enumerate(candidates, start=1):
-        try:
-            df = fdr.DataReader(code, start, end)
+    stage1_results = []
+    completed = 0
 
-            if df is not None and not df.empty:
-                df = df[df.index <= pd.to_datetime(date)]
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {
+            executor.submit(analyze_one_stock, code, name, date): (code, name)
+            for code, name in candidates
+        }
 
-                if len(df) >= 25:
-                    d = df.iloc[-1]
+        for future in as_completed(futures):
+            completed += 1
 
-                    open_p = d["Open"]
-                    high_p = d["High"]
-                    close_p = d["Close"]
-                    volume = d["Volume"]
+            result = future.result()
+            if result is not None:
+                stage1_results.append(result)
 
-                    if open_p != 0 and high_p != 0 and close_p != 0:
-                        value = close_p * volume
+            progress.progress(completed / total)
+            status.write(f"1차 기술분석 중... {completed}/{total}개 완료")
+            found_box.write(f"1차 통과 종목 {len(stage1_results)}개")
 
-                        change_rate = ((close_p - open_p) / open_p) * 100
-                        close_near_high = ((high_p - close_p) / high_p) * 100
-                        upper_tail = ((high_p - close_p) / close_p) * 100
+    if not stage1_results:
+        status.write("분석 완료: 조건 통과 종목 없음")
+        return pd.DataFrame()
 
-                        ma5 = df["Close"].rolling(5).mean().iloc[-1]
-                        ma20 = df["Close"].rolling(20).mean().iloc[-1]
-                        high20 = df["High"].rolling(20).max().iloc[-2]
-                        avg_volume20 = df["Volume"].rolling(20).mean().iloc[-2]
-                        volume_power = volume / avg_volume20 if avg_volume20 > 0 else 0
+    # 2차: 통과 종목만 뉴스 분석
+    enriched_results = []
+    news_total = len(stage1_results)
+    news_progress = st.progress(0)
+    news_status = st.empty()
 
-                        candle = "양봉" if close_p > open_p else "음봉"
-                        sector = get_sector(name)
+    for idx, item in enumerate(stage1_results, start=1):
+        name = item["종목명"]
 
-                        if value >= 10000000000 and close_p >= 1000 and change_rate >= 3:
-                            score = 0
-                            reasons = []
+        news_titles = fetch_news_titles(name)
+        news_material = infer_news_material(news_titles)
+        theme_sector = infer_theme_sector(news_titles)
+        news_titles_text = " / ".join(news_titles[:5])
 
-                            if value >= 10000000000:
-                                score += 10
-                                reasons.append("거래대금 100억 이상")
+        item["테마섹터"] = theme_sector
+        item["뉴스재료"] = news_material
+        item["뉴스건수"] = len(news_titles)
+        item["뉴스제목"] = news_titles_text
 
-                            if value >= 30000000000:
-                                score += 15
-                                reasons.append("거래대금 300억 이상")
+        enriched_results.append(item)
 
-                            if value >= 50000000000:
-                                score += 20
-                                reasons.append("거래대금 500억 이상")
+        news_progress.progress(idx / news_total)
+        news_status.write(f"2차 뉴스분석 중... {idx}/{news_total}개 완료")
 
-                            if volume_power >= 2:
-                                score += 15
-                                reasons.append("20일 평균 거래량 2배 이상")
+    result_df = pd.DataFrame(enriched_results)
 
-                            if volume_power >= 3:
-                                score += 20
-                                reasons.append("20일 평균 거래량 3배 이상")
+    if not result_df.empty:
+        result_df = result_df.sort_values(by="점수", ascending=False)
 
-                            if change_rate >= 5:
-                                score += 15
-                                reasons.append("5% 이상 상승")
+    status.write(f"분석 완료: 총 {total}개 중 {len(result_df)}개 통과")
+    found_box.write(f"최종 통과 종목 {len(result_df)}개")
 
-                            if change_rate >= 8:
-                                score += 20
-                                reasons.append("8% 이상 상승")
-
-                            if change_rate >= 15:
-                                score += 20
-                                reasons.append("15% 이상 급등")
-
-                            if candle == "양봉":
-                                score += 10
-                                reasons.append("양봉 마감")
-                            else:
-                                score -= 15
-                                reasons.append("음봉 마감")
-
-                            if close_near_high <= 5:
-                                score += 15
-                                reasons.append("고가 5% 이내 마감")
-
-                            if close_near_high <= 3:
-                                score += 20
-                                reasons.append("고가 3% 이내 마감")
-
-                            if upper_tail <= 5:
-                                score += 10
-                                reasons.append("윗꼬리 짧음")
-
-                            if close_p > ma5:
-                                score += 10
-                                reasons.append("5일선 위")
-
-                            if close_p > ma20:
-                                score += 10
-                                reasons.append("20일선 위")
-
-                            if ma5 > ma20:
-                                score += 10
-                                reasons.append("5일선 > 20일선")
-
-                            if close_p >= high20:
-                                score += 25
-                                reasons.append("20일 신고가 돌파")
-
-                            if change_rate >= 25 and close_near_high > 3:
-                                score -= 15
-                                reasons.append("과열 주의")
-
-                            if score >= 45:
-                                news_titles = fetch_news_titles(name)
-                                news_material = infer_news_material(news_titles)
-                                theme_sector = infer_theme_sector(news_titles)
-                                news_titles_text = " / ".join(news_titles[:5])
-
-                                results.append({
-                                    "관심": False,
-                                    "종목코드": code,
-                                    "종목명": name,
-                                    "섹터": sector,
-                                    "테마섹터": theme_sector,
-                                    "뉴스재료": news_material,
-                                    "뉴스건수": len(news_titles),
-                                    "뉴스제목": news_titles_text,
-                                    "차트": f"https://finance.naver.com/item/main.naver?code={code}",
-                                    "뉴스": get_news_link(name),
-                                    "캔들": candle,
-                                    "등락률(%)": round(change_rate, 2),
-                                    "거래대금(억)": round(value / 100000000, 1),
-                                    "거래량폭증배수": round(volume_power, 2),
-                                    "5일선": round(ma5, 0),
-                                    "20일선": round(ma20, 0),
-                                    "20일신고가돌파": "Y" if close_p >= high20 else "N",
-                                    "고가대비종가거리(%)": round(close_near_high, 2),
-                                    "점수": int(score),
-                                    "이유": ", ".join(reasons)
-                                })
-
-        except:
-            pass
-
-        progress.progress(idx / total)
-        status.write(f"분석 중... {idx}/{total}개 완료")
-        found_box.write(f"조건 통과 종목 {len(results)}개")
-
-    progress.progress(1.0)
-    status.write(f"분석 완료: 총 {total}개 중 {len(results)}개 통과")
-
-    result = pd.DataFrame(results)
-
-    if not result.empty:
-        result = result.sort_values(by="점수", ascending=False)
-
-    return result
+    return result_df
 
 
 tab1, tab2 = st.tabs(["📊 분석", "⭐ 관심종목"])
