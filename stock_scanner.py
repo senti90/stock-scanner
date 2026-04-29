@@ -72,7 +72,6 @@ def is_excluded(name):
     if any(k in upper_name for k in exclude_keywords):
         return True
 
-    # 우선주 제거
     if name.endswith("우") or "우B" in name or "우C" in name:
         return True
 
@@ -119,18 +118,18 @@ def scrape_naver_sise(url, pages=4):
 
 
 def get_candidates():
-    volume_url = "https://finance.naver.com/sise/sise_quant.naver?sosok=0"
-    volume_url2 = "https://finance.naver.com/sise/sise_quant.naver?sosok=1"
-    rise_url = "https://finance.naver.com/sise/sise_rise.naver?sosok=0"
-    rise_url2 = "https://finance.naver.com/sise/sise_rise.naver?sosok=1"
+    urls = [
+        "https://finance.naver.com/sise/sise_quant.naver?sosok=0",
+        "https://finance.naver.com/sise/sise_quant.naver?sosok=1",
+        "https://finance.naver.com/sise/sise_rise.naver?sosok=0",
+        "https://finance.naver.com/sise/sise_rise.naver?sosok=1",
+    ]
 
     candidates = []
-    candidates += scrape_naver_sise(volume_url, pages=3)
-    candidates += scrape_naver_sise(volume_url2, pages=3)
-    candidates += scrape_naver_sise(rise_url, pages=3)
-    candidates += scrape_naver_sise(rise_url2, pages=3)
 
-    # 중복 제거
+    for url in urls:
+        candidates += scrape_naver_sise(url, pages=3)
+
     unique = {}
     for code, name in candidates:
         unique[code] = name
@@ -143,156 +142,156 @@ def fast_scan(date):
     end = (date + timedelta(days=1)).strftime("%Y-%m-%d")
 
     candidates = get_candidates()
+    total = len(candidates)
+
+    progress = st.progress(0)
+    status = st.empty()
+    found_box = st.empty()
+
+    status.write(f"후보 종목 {total}개 분석 준비 중...")
+    found_box.write("조건 통과 종목 0개")
+
     results = []
 
-    for code, name in candidates:
+    if total == 0:
+        status.write("후보 종목을 가져오지 못했습니다.")
+        return pd.DataFrame()
+
+    for idx, (code, name) in enumerate(candidates, start=1):
         try:
             df = fdr.DataReader(code, start, end)
 
-            if df is None or df.empty:
-                continue
+            if df is not None and not df.empty:
+                df = df[df.index <= pd.to_datetime(date)]
 
-            df = df[df.index <= pd.to_datetime(date)]
+                if len(df) >= 25:
+                    d = df.iloc[-1]
 
-            if len(df) < 25:
-                continue
+                    open_p = d["Open"]
+                    high_p = d["High"]
+                    close_p = d["Close"]
+                    volume = d["Volume"]
 
-            d = df.iloc[-1]
+                    if open_p != 0 and high_p != 0 and close_p != 0:
+                        value = close_p * volume
 
-            open_p = d["Open"]
-            high_p = d["High"]
-            low_p = d["Low"]
-            close_p = d["Close"]
-            volume = d["Volume"]
+                        change_rate = ((close_p - open_p) / open_p) * 100
+                        close_near_high = ((high_p - close_p) / high_p) * 100
+                        upper_tail = ((high_p - close_p) / close_p) * 100
 
-            if open_p == 0 or high_p == 0 or close_p == 0:
-                continue
+                        ma5 = df["Close"].rolling(5).mean().iloc[-1]
+                        ma20 = df["Close"].rolling(20).mean().iloc[-1]
+                        high20 = df["High"].rolling(20).max().iloc[-2]
+                        avg_volume20 = df["Volume"].rolling(20).mean().iloc[-2]
+                        volume_power = volume / avg_volume20 if avg_volume20 > 0 else 0
 
-            value = close_p * volume
+                        candle = "양봉" if close_p > open_p else "음봉"
+                        sector = get_sector(name)
 
-            change_rate = ((close_p - open_p) / open_p) * 100
-            close_near_high = ((high_p - close_p) / high_p) * 100
-            upper_tail = ((high_p - close_p) / close_p) * 100
+                        if value >= 10000000000 and close_p >= 1000 and change_rate >= 3:
+                            score = 0
+                            reasons = []
 
-            ma5 = df["Close"].rolling(5).mean().iloc[-1]
-            ma20 = df["Close"].rolling(20).mean().iloc[-1]
-            high20 = df["High"].rolling(20).max().iloc[-2]
-            avg_volume20 = df["Volume"].rolling(20).mean().iloc[-2]
-            volume_power = volume / avg_volume20 if avg_volume20 > 0 else 0
+                            if value >= 10000000000:
+                                score += 10
+                                reasons.append("거래대금 100억 이상")
 
-            candle = "양봉" if close_p > open_p else "음봉"
-            sector = get_sector(name)
+                            if value >= 30000000000:
+                                score += 15
+                                reasons.append("거래대금 300억 이상")
 
-            # 너무 약한 종목만 제거
-            if value < 10000000000:
-                continue
+                            if value >= 50000000000:
+                                score += 20
+                                reasons.append("거래대금 500억 이상")
 
-            if close_p < 1000:
-                continue
+                            if volume_power >= 2:
+                                score += 15
+                                reasons.append("20일 평균 거래량 2배 이상")
 
-            if change_rate < 3:
-                continue
+                            if volume_power >= 3:
+                                score += 20
+                                reasons.append("20일 평균 거래량 3배 이상")
 
-            score = 0
-            reasons = []
+                            if change_rate >= 5:
+                                score += 15
+                                reasons.append("5% 이상 상승")
 
-            # 수급
-            if value >= 10000000000:
-                score += 10
-                reasons.append("거래대금 100억 이상")
+                            if change_rate >= 8:
+                                score += 20
+                                reasons.append("8% 이상 상승")
 
-            if value >= 30000000000:
-                score += 15
-                reasons.append("거래대금 300억 이상")
+                            if change_rate >= 15:
+                                score += 20
+                                reasons.append("15% 이상 급등")
 
-            if value >= 50000000000:
-                score += 20
-                reasons.append("거래대금 500억 이상")
+                            if candle == "양봉":
+                                score += 10
+                                reasons.append("양봉 마감")
+                            else:
+                                score -= 15
+                                reasons.append("음봉 마감")
 
-            if volume_power >= 2:
-                score += 15
-                reasons.append("20일 평균 거래량 2배 이상")
+                            if close_near_high <= 5:
+                                score += 15
+                                reasons.append("고가 5% 이내 마감")
 
-            if volume_power >= 3:
-                score += 20
-                reasons.append("20일 평균 거래량 3배 이상")
+                            if close_near_high <= 3:
+                                score += 20
+                                reasons.append("고가 3% 이내 마감")
 
-            # 상승/캔들
-            if change_rate >= 5:
-                score += 15
-                reasons.append("5% 이상 상승")
+                            if upper_tail <= 5:
+                                score += 10
+                                reasons.append("윗꼬리 짧음")
 
-            if change_rate >= 8:
-                score += 20
-                reasons.append("8% 이상 상승")
+                            if close_p > ma5:
+                                score += 10
+                                reasons.append("5일선 위")
 
-            if change_rate >= 15:
-                score += 20
-                reasons.append("15% 이상 급등")
+                            if close_p > ma20:
+                                score += 10
+                                reasons.append("20일선 위")
 
-            if candle == "양봉":
-                score += 10
-                reasons.append("양봉 마감")
-            else:
-                score -= 15
-                reasons.append("음봉 마감")
+                            if ma5 > ma20:
+                                score += 10
+                                reasons.append("5일선 > 20일선")
 
-            if close_near_high <= 5:
-                score += 15
-                reasons.append("고가 5% 이내 마감")
+                            if close_p >= high20:
+                                score += 25
+                                reasons.append("20일 신고가 돌파")
 
-            if close_near_high <= 3:
-                score += 20
-                reasons.append("고가 3% 이내 마감")
+                            if change_rate >= 25 and close_near_high > 3:
+                                score -= 15
+                                reasons.append("과열 주의")
 
-            if upper_tail <= 5:
-                score += 10
-                reasons.append("윗꼬리 짧음")
-
-            # 기술적 분석
-            if close_p > ma5:
-                score += 10
-                reasons.append("5일선 위")
-
-            if close_p > ma20:
-                score += 10
-                reasons.append("20일선 위")
-
-            if ma5 > ma20:
-                score += 10
-                reasons.append("5일선 > 20일선")
-
-            if close_p >= high20:
-                score += 25
-                reasons.append("20일 신고가 돌파")
-
-            # 과열 감점
-            if change_rate >= 25 and close_near_high > 3:
-                score -= 15
-                reasons.append("과열 주의")
-
-            if score >= 45:
-                results.append({
-                    "관심": False,
-                    "종목코드": code,
-                    "종목명": name,
-                    "섹터": sector,
-                    "차트": f"https://finance.naver.com/item/main.naver?code={code}",
-                    "뉴스": get_news_link(name),
-                    "캔들": candle,
-                    "등락률(%)": round(change_rate, 2),
-                    "거래대금(억)": round(value / 100000000, 1),
-                    "거래량폭증배수": round(volume_power, 2),
-                    "5일선": round(ma5, 0),
-                    "20일선": round(ma20, 0),
-                    "20일신고가돌파": "Y" if close_p >= high20 else "N",
-                    "고가대비종가거리(%)": round(close_near_high, 2),
-                    "점수": int(score),
-                    "이유": ", ".join(reasons)
-                })
+                            if score >= 45:
+                                results.append({
+                                    "관심": False,
+                                    "종목코드": code,
+                                    "종목명": name,
+                                    "섹터": sector,
+                                    "차트": f"https://finance.naver.com/item/main.naver?code={code}",
+                                    "뉴스": get_news_link(name),
+                                    "캔들": candle,
+                                    "등락률(%)": round(change_rate, 2),
+                                    "거래대금(억)": round(value / 100000000, 1),
+                                    "거래량폭증배수": round(volume_power, 2),
+                                    "5일선": round(ma5, 0),
+                                    "20일선": round(ma20, 0),
+                                    "20일신고가돌파": "Y" if close_p >= high20 else "N",
+                                    "고가대비종가거리(%)": round(close_near_high, 2),
+                                    "점수": int(score),
+                                    "이유": ", ".join(reasons)
+                                })
 
         except:
-            continue
+            pass
+
+        progress.progress(idx / total)
+        status.write(f"분석 중... {idx}/{total}개 완료")
+        found_box.write(f"조건 통과 종목 {len(results)}개")
+
+    progress.progress(1.0)
+    status.write(f"분석 완료: 총 {total}개 중 {len(results)}개 통과")
 
     result = pd.DataFrame(results)
 
