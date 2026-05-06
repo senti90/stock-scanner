@@ -540,6 +540,45 @@ else:
     for idx, (theme, count) in enumerate(theme_count.items(), start=1):
         st.write(f"{idx}위 | {theme} ({count}개)")
     
+    st.subheader("🏆 테마별 대장주 후보")
+
+    top_theme_stocks = (
+        filtered_result
+        .sort_values(
+        by=["테마섹터", "점수"],
+        ascending=[True, False]
+        )
+        .groupby("테마섹터")
+        .head(1)
+        .sort_values(by="점수", ascending=False)
+    )
+
+    leader_cols = [
+        "테마섹터",
+        "종목명",
+        "점수",
+        "뉴스재료",
+        "등락률(%)",
+        "거래대금(억)",
+        "차트",
+        "뉴스",
+    ]
+
+    st.dataframe(
+        top_theme_stocks[leader_cols],
+        column_config={
+            "차트": st.column_config.LinkColumn(
+                "차트",
+                display_text="차트보기"
+            ),
+            "뉴스": st.column_config.LinkColumn(
+                "뉴스",
+                display_text="뉴스보기"
+            ),
+        },
+        use_container_width=True,
+        hide_index=True
+    )
     
     edited = st.data_editor(
         display_df,
