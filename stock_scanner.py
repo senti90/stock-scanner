@@ -539,7 +539,7 @@ with tab2:
         )
 
         st.dataframe(
-            watch[["name", "sector", "score", "memo", "reason", "news_material", "news_titles", "차트"]]
+            watch[["name", "sector", "score", "memo", "reason", "news_material", "news_titles", "차트"]],
             column_config={
                 "차트": st.column_config.LinkColumn("차트", display_text="보기")
             },
