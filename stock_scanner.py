@@ -29,6 +29,7 @@ def load_watchlist():
 
 
 def save_watchlist(row):
+    
     item = {
         "code": str(row["종목코드"]),
         "name": str(row["종목명"]),
@@ -42,6 +43,9 @@ def save_watchlist(row):
         "memo": "",
     }
     supabase.table("watchlist").insert(item).execute()
+    
+def delete_watchlist(item_id):
+    supabase.table("watchlist").delete().eq("id", item_id).execute()
 
 
 def get_news_link(name):
@@ -530,18 +534,46 @@ with tab2:
     if watch.empty:
         st.info("관심종목 없음")
     else:
-        for col in ["sector", "news_material", "news_titles"]:
+        for col in ["sector", "news_material", "news_titles", "memo"]:
             if col not in watch.columns:
                 watch[col] = ""
+
+        watch["삭제"] = False
 
         watch["차트"] = watch["code"].apply(
             lambda x: f"https://finance.naver.com/item/main.naver?code={x}"
         )
 
-        st.dataframe(
-            watch[["name", "sector", "score", "memo", "reason", "news_material", "news_titles", "차트"]],
+        display_watch = watch[
+            ["삭제", "id", "name", "sector", "score", "memo", "reason", "news_material", "news_titles", "차트"]
+        ]
+
+        edited_watch = st.data_editor(
+            display_watch,
+            key="watch_editor",
             column_config={
-                "차트": st.column_config.LinkColumn("차트", display_text="보기")
+                "삭제": st.column_config.CheckboxColumn("삭제"),
+                "차트": st.column_config.LinkColumn(
+                    "차트",
+                    display_text="보기"
+                )
             },
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True,
+            disabled=[
+                "id", "name", "sector", "score", "reason",
+                "news_material", "news_titles", "차트"
+            ]
         )
+
+        selected_delete = edited_watch[edited_watch["삭제"] == True]
+
+        if st.button("선택한 관심종목 삭제"):
+            if selected_delete.empty:
+                st.warning("삭제할 종목을 체크해주세요.")
+            else:
+                for _, row in selected_delete.iterrows():
+                    delete_watchlist(int(row["id"]))
+
+                st.success(f"{len(selected_delete)}개 삭제 완료")
+                st.rerun()
