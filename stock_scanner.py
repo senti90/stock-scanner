@@ -474,18 +474,24 @@ with tab1:
 
     result = st.session_state.result
 
-min_score = st.slider(
-    "최소 점수 필터",
-    min_value=0,
-    max_value=250,
-    value=45,
-    step=5
-)
+
+
+result = st.session_state.result
 
 if result.empty or "점수" not in result.columns:
     filtered_result = pd.DataFrame()
+
 else:
+    min_score = st.slider(
+        "최소 점수 필터",
+        min_value=0,
+        max_value=250,
+        value=45,
+        step=5
+    )
+
     filtered_result = result[result["점수"] >= min_score]
+
 
 if filtered_result.empty:
     st.info("분석 시작 버튼을 눌러주세요. 조건 만족 종목이 없으면 결과가 비어 있을 수 있습니다.")
