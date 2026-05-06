@@ -465,9 +465,10 @@ with tab1:
 
     result = st.session_state.result
 
-    if result.empty:
-        st.info("분석 시작 버튼을 눌러주세요. 조건 만족 종목이 없으면 결과가 비어 있을 수 있습니다.")
-  else:
+if result.empty:
+    st.info("분석 시작 버튼을 눌러주세요. 조건 만족 종목이 없으면 결과가 비어 있을 수 있습니다.")
+
+else:
     display_cols = [
         "관심",
         "종목명",
@@ -497,22 +498,29 @@ with tab1:
         key="editor",
         column_config={
             "관심": st.column_config.CheckboxColumn("관심"),
-            "차트": st.column_config.LinkColumn("차트", display_text="차트보기"),
-            "뉴스": st.column_config.LinkColumn("뉴스", display_text="뉴스보기"),
+            "차트": st.column_config.LinkColumn(
+                "차트",
+                display_text="차트보기"
+            ),
+            "뉴스": st.column_config.LinkColumn(
+                "뉴스",
+                display_text="뉴스보기"
+            ),
         },
         use_container_width=True,
         hide_index=True
     )
 
-        selected = edited[edited["관심"] == True]
+    selected = edited[edited["관심"] == True]
 
-        if st.button("관심종목 저장"):
-            if selected.empty:
-                st.warning("체크한 종목이 없습니다.")
-            else:
-                for _, row in selected.iterrows():
-                    save_watchlist(row)
-                st.success(f"{len(selected)}개 저장 완료")
+    if st.button("관심종목 저장"):
+        if selected.empty:
+            st.warning("체크한 종목이 없습니다.")
+        else:
+            for _, row in selected.iterrows():
+                save_watchlist(row)
+
+            st.success(f"{len(selected)}개 저장 완료")
 
 
 with tab2:
