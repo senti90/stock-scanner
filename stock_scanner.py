@@ -39,6 +39,7 @@ def save_watchlist(row):
         "sector": str(row["섹터"]),
         "news_material": str(row["뉴스재료"]),
         "news_titles": str(row["뉴스제목"]),
+        "memo": "",
     }
     supabase.table("watchlist").insert(item).execute()
 
@@ -538,7 +539,7 @@ with tab2:
         )
 
         st.dataframe(
-            watch[["name", "sector", "score", "reason", "news_material", "news_titles", "차트"]],
+            watch[["name", "sector", "score", "memo", "reason", "news_material", "news_titles", "차트"]]
             column_config={
                 "차트": st.column_config.LinkColumn("차트", display_text="보기")
             },
