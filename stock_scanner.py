@@ -47,6 +47,10 @@ def save_watchlist(row):
 def delete_watchlist(item_id):
     supabase.table("watchlist").delete().eq("id", item_id).execute()
 
+def update_watchlist_memo(item_id, memo):
+    supabase.table("watchlist").update({
+        "memo": memo
+    }).eq("id", item_id).execute()
 
 def get_news_link(name):
     query = urllib.parse.quote(f"{name} 주가 상승 재료")
@@ -567,7 +571,16 @@ with tab2:
         )
 
         selected_delete = edited_watch[edited_watch["삭제"] == True]
+        if st.button("메모 저장"):
+    for _, row in edited_watch.iterrows():
+        update_watchlist_memo(
+            int(row["id"]),
+            str(row["memo"])
+        )
 
+    st.success("메모 저장 완료")
+    st.rerun()
+    
         if st.button("선택한 관심종목 삭제"):
             if selected_delete.empty:
                 st.warning("삭제할 종목을 체크해주세요.")
