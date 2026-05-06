@@ -571,15 +571,16 @@ with tab2:
         )
 
         selected_delete = edited_watch[edited_watch["삭제"] == True]
-        if st.button("메모 저장"):
-    for _, row in edited_watch.iterrows():
-        update_watchlist_memo(
-            int(row["id"]),
-            str(row["memo"])
+
+    if st.button("메모 저장"):
+        for _, row in edited_watch.iterrows():
+            update_watchlist_memo(
+                int(row["id"]),
+                str(row["memo"])
         )
 
-    st.success("메모 저장 완료")
-    st.rerun()
+        st.success("메모 저장 완료")
+        st.rerun()
     
         if st.button("선택한 관심종목 삭제"):
             if selected_delete.empty:
