@@ -519,8 +519,28 @@ else:
         "20일선",
     ]
 
-    display_df = filtered_result.head(20)[display_cols]
+    display_df = (
+        filtered_result
+        .sort_values(
+            by=["테마섹터", "점수"],
+            ascending=[True, False]
+        )
+        .head(20)[display_cols]
+        )
 
+    
+    theme_count = (
+        filtered_result["테마섹터"]
+        .value_counts()
+        .head(5)
+    )
+
+    st.subheader("🔥 오늘 강한 테마 TOP5")
+
+    for idx, (theme, count) in enumerate(theme_count.items(), start=1):
+        st.write(f"{idx}위 | {theme} ({count}개)")
+    
+    
     edited = st.data_editor(
         display_df,
         key="editor",
