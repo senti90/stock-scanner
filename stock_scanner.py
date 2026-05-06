@@ -467,18 +467,42 @@ with tab1:
 
     if result.empty:
         st.info("분석 시작 버튼을 눌러주세요. 조건 만족 종목이 없으면 결과가 비어 있을 수 있습니다.")
-    else:
-        edited = st.data_editor(
-            result.head(20),
-            key="editor",
-            column_config={
-                "관심": st.column_config.CheckboxColumn("관심"),
-                "차트": st.column_config.LinkColumn("차트", display_text="차트보기"),
-                "뉴스": st.column_config.LinkColumn("뉴스", display_text="뉴스보기"),
-            },
-            use_container_width=True,
-            hide_index=True
-        )
+  else:
+    display_cols = [
+        "관심",
+        "종목명",
+        "점수",
+        "섹터",
+        "테마섹터",
+        "뉴스재료",
+        "등락률(%)",
+        "거래대금(억)",
+        "거래량폭증배수",
+        "고가대비종가거리(%)",
+        "20일신고가돌파",
+        "캔들",
+        "차트",
+        "뉴스",
+        "이유",
+        "뉴스제목",
+        "종목코드",
+        "5일선",
+        "20일선",
+    ]
+
+    display_df = result.head(20)[display_cols]
+
+    edited = st.data_editor(
+        display_df,
+        key="editor",
+        column_config={
+            "관심": st.column_config.CheckboxColumn("관심"),
+            "차트": st.column_config.LinkColumn("차트", display_text="차트보기"),
+            "뉴스": st.column_config.LinkColumn("뉴스", display_text="뉴스보기"),
+        },
+        use_container_width=True,
+        hide_index=True
+    )
 
         selected = edited[edited["관심"] == True]
 
